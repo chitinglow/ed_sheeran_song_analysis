@@ -1,0 +1,186 @@
+---
+title: "Text analysis of Ed Sheeran Songs"
+author: "Chi Ting Low"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+```{r, message = FALSE, warnings = FALSE}
+#ed sheeran lyrics
+library(readxl)
+library(tidyverse)
+library(stringr)
+library(tidytext)
+library(wordcloud)
+library(tm)
+library(stopwords)
+library(ggthemes)
+library(cld3)
+library(DT)
+library(lattice)
+library(udpipe)
+
+#read data
+songs <- read_xlsx('Lyrics.xlsx')
+
+#lyrics words counts
+songs$characters <- str_count(songs$Lyrics)
+```
+
+首先我们先读取数据及加载所需要的R包，用“str_count”来算出歌词的数量。
+
+```{r}
+## number of characters per song
+songs %>% 
+  ggplot() +
+  geom_boxplot(aes(Album, characters), fill = "chocolate", alpha = 0.7) +
+  labs(y = "Length of song lyrics (in characters)", x = "Album", 
+       title = "Length (in characters) of song lyrics per Album") +
+  theme_igray() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylim(0, 6000)
+```
+从箱形图这里我们可以看出 The Slumdon Bridge 这张专辑是所以专辑里歌词数量最多的，其次是 No. 5 Collaboration Project，X 和 Divided 这两张专辑。
+
+```{r}
+songs %>% 
+  group_by(Album) %>% 
+  summarise(characters = round(mean(characters, na.rm = TRUE), 0)) %>% 
+  ggplot(aes(reorder(Album, -characters), characters)) +
+  geom_col(fill = "chocolate", alpha = 0.7) +
+  labs(y = "Length of song lyrics (in characters)", x = "Album", 
+       title = "Average lyrics characters per Album") +
+  theme_igray() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ylim(0, 3000)
+```
+这里我们可以看到 The Slumdon Bridge 是所有专辑里平均使用最多的文字。
+
+
+```{r}
+#english
+#model <- udpipe_download_model(language = "english")
+udmodel <- udpipe_load_model(file = 'english-ud-2.0-170801.udpipe')
+
+#tokenized the lyrics
+token <- udpipe_annotate(udmodel, songs$Lyrics)
+x <- data.frame(token)
+
+
+#Universal POS
+key <- txt_freq(x$upos)
+key$key <- factor(key$key, levels = rev(key$key))
+barchart(key ~ freq, 
+         data = key, 
+         col = "blue", 
+         main = "Universal Parts of Speech frequency of occurrence", 
+         xlab = "Frequency")
+```
+接着是用udpipe 这个包来分析Ed Sheeran 歌词里的通用词性。 分析结果显示名词是他所有歌里使用最多的词性然后是动词和形容词。
+
+```{r}
+#top nouns
+nouns <- subset(x, upos %in% c("NOUN")) 
+nouns <- txt_freq(nouns$token)
+nouns$key <- factor(nouns$key, 
+                    levels = rev(nouns$key))
+barchart(key ~ freq,
+         data = head(nouns, 20), 
+         col = "red",
+         main = "Most occurring nouns", 
+         xlab = "Frequency")
+```
+从动词的分析结果来看，我们可以发现他的歌里排名前20的名词。这里我们发现love，time，way 等名词都是接近或间接形容爱情。
+
+```{r}
+#top adjective
+adj <- subset(x, upos %in% c("ADJ")) 
+adj <- txt_freq(adj$token)
+adj$key <- factor(adj$key, 
+                    levels = rev(adj$key))
+barchart(key ~ freq, 
+         data = head(adj, 20),
+         col = "red", 
+         main = "Most occurring adjectives",
+         xlab = "Frequency")
+```
+而形容词中这是cold，new，only，little 是使用率最多的形容词
+
+
+```{r}
+#top verb
+verb <- subset(x, upos %in% c("VERB")) 
+verb <- txt_freq(verb$token)
+verb$key <- factor(verb$key, 
+                    levels = rev(verb$key))
+barchart(key ~ freq, 
+         data = head(verb, 20), 
+         col = "red", 
+         main = "Most occurring Verbs", 
+         xlab = "Frequency")
+```
+而know，need，love 是使用率最多的动词。
+
+
+```{r}
+##combining the most frequent nouns and verb
+x$phrase_tag <- as_phrasemachine(x$upos, 
+                                 type = "upos")
+words <- keywords_phrases(x = x$phrase_tag, 
+                          term = tolower(x$token), 
+                          pattern = "(A|N)*N(P+D*(A|N)*N)*", 
+                          is_regex = TRUE, 
+                          detailed = FALSE)
+words <- subset(words, ngram > 1 & freq > 3)
+words$key <- factor(words$keyword,
+                    levels = rev(words$keyword))
+barchart(key ~ freq,
+         data = head(words, 20), 
+         col = "red", 
+         main = "Keywords - simple noun phrases",
+         xlab = "Frequency")
+```
+如果我们将名词和动词链接起来是不是可以查出什么有意义的词汇呢？结果发现将使用率最多的两个词汇结合起来发现your eyes，my mind， my heart 等词汇都是间接符合爱情的歌。由其可见Ed Sheeran 是情歌歌手。
+
+
+```{r, warning = FALSE, message = FALSE}
+## _text cleaning
+#convert into corpus
+docs <- Corpus(VectorSource(songs$Lyrics))
+# Convert the text to lower case
+docs <- tm_map(docs, content_transformer(tolower))
+# Remove numbers
+docs <- tm_map(docs, removeNumbers)
+# Remove english common stopwords
+docs <- tm_map(docs, removeWords, stopwords("english"))
+# Remove punctuations
+docs <- tm_map(docs, removePunctuation)
+# Eliminate extra white spaces
+docs <- tm_map(docs, stripWhitespace)
+# Text stemming
+docs <- tm_map(docs, stemDocument)
+
+
+dtm <- TermDocumentMatrix(docs)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing = TRUE)
+d <- data.frame(word = names(v),freq = v)
+
+# Create a word cloud
+par(bg = "grey30")
+set.seed(1234)
+wordcloud(words = d$word, freq = d$freq, min.freq = 1,
+          max.words = 200, random.order = FALSE, rot.per = 0.35, 
+          colors = brewer.pal(8, "Dark2"))
+```
+接着我做了一个词云。首先我们先处理数据。我将歌词小写化，并把数字，标点符号，停用词和空白格剔除。然后提出词干再生成词云。从词云里就可以看出Ed Sheeran 歌里最常用的词里。
+
+
+参考：
+https://cran.r-project.org/web/packages/udpipe/udpipe.pdf
+https://github.com/bnosac/udpipe
+https://cran.r-project.org/web/packages/udpipe/vignettes/udpipe-annotation.html
+https://bnosac.github.io/udpipe/en/index.html
+http://ufal.mff.cuni.cz/udpipe/users-manual
+http://www.sthda.com/english/wiki/text-mining-and-word-cloud-fundamentals-in-r-5-simple-steps-you-should-know
+
